@@ -1,5 +1,11 @@
 import * as duckdb from '@duckdb/duckdb-wasm';
-import type { EventType, GameEvent, HeatmapMode } from '../types/game';
+import type { EventType, GameEvent, HeatmapMode, MapId } from "../types/game";
+import {
+  normalizeMatchTimes,
+  parseEventType,
+  parseMapId,
+  parseTimestampMs,
+} from "./gameData";
 
 let dbPromise: Promise<duckdb.AsyncDuckDB> | null = null;
 
@@ -31,91 +37,88 @@ export async function registerEventsParquet() {
   return db;
 }
 
-function normalizeEvent(value: string): EventType {
-  const mapped = value.trim();
-  if (mapped === 'BotPosition') return 'BotPosition';
-  if (mapped === 'Kill') return 'Kill';
-  if (mapped === 'Killed') return 'Killed';
-  if (mapped === 'BotKill') return 'BotKill';
-  if (mapped === 'BotKilled') return 'BotKilled';
-  if (mapped === 'KilledByStorm') return 'KilledByStorm';
-  if (mapped === 'Loot') return 'Loot';
-  return 'Position';
-}
-
-function normalizeTs(value: unknown): number {
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const asNumber = Number(value);
-    if (!Number.isNaN(asNumber)) return asNumber;
-    const parsed = Date.parse(value);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return 0;
-}
-
 function generateSyntheticEvents(): GameEvent[] {
-  const maps = ['AmbroseValley', 'GrandRift', 'Lockdown'] as const;
-  const dateOptions = ['February_10', 'February_11', 'February_12'];
-  const events: GameEvent[] = [];
+  const maps: MapId[] = ["AmbroseValley", "GrandRift", "Lockdown"];
+  const dates = ["2024-08-14", "2024-08-15", "2024-08-16"];
+  const matches = ["match-01", "match-02", "match-03"];
+  const eventTypes: EventType[] = [
+    "Position",
+    "BotPosition",
+    "Kill",
+    "Killed",
+    "Loot",
+    "KilledByStorm",
+  ];
+  const synthetic: GameEvent[] = [];
 
-  for (let matchIdx = 0; matchIdx < 2; matchIdx++) {
-    const mapId = maps[matchIdx % maps.length];
-    const matchId = `synthetic_match_${matchIdx + 1}`;
-    const date = dateOptions[matchIdx % dateOptions.length];
+  for (let matchIndex = 0; matchIndex < matches.length; matchIndex++) {
+    const mapId = maps[matchIndex % maps.length];
+    const date = dates[matchIndex % dates.length];
+    const matchId = matches[matchIndex];
+    const players = [
+      { userId: `human-${matchIndex}-1`, isBot: false },
+      { userId: `human-${matchIndex}-2`, isBot: false },
+      { userId: `bot-${matchIndex}-1`, isBot: true },
+      { userId: `bot-${matchIndex}-2`, isBot: true },
+    ];
 
-    const humanIds = ['7d2d3f7b-7e7c-4f05-bc78-01a2a6d8e911', 'd4c5f8de-c13a-4dc2-a943-d6c14f94a1f5'];
-    const botIds = ['1440', '382'];
-
-    for (const [playerIndex, userId] of humanIds.entries()) {
-      const startX = -260 + playerIndex * 60;
-      const startZ = -330 + playerIndex * 55;
-      for (let step = 0; step < 28; step++) {
-        const ts = step * 1000;
-        const driftX = Math.sin(step / 3) * 20;
-        const driftZ = Math.cos(step / 4) * 16;
-        events.push({
-          userId,
+    let baseTs = 0;
+    for (const player of players) {
+      const pathLength = 20 + matchIndex * 7;
+      for (let i = 0; i < pathLength; i++) {
+        const t = baseTs + i * 650;
+        const wave = (i / pathLength) * Math.PI * 2;
+        const startX = 70 + (matchIndex % 3) * 90 + Math.sin(wave) * 90;
+        const startZ = 70 + (matchIndex % 2) * 120 + Math.cos(wave) * 110;
+        synthetic.push({
+          userId: player.userId,
           matchId,
           mapId,
           date,
-          x: startX + driftX,
-          y: 120,
-          z: startZ + driftZ,
-          tsMs: ts,
-          event: 'Position',
-          isBot: false,
+          x: Number((startX + (player.isBot ? 12 : 0)).toFixed(2)),
+          y: 0,
+          z: Number((startZ + (player.isBot ? 18 : 0)).toFixed(2)),
+          tsMs: t,
+          event: player.isBot ? "BotPosition" : "Position",
+          isBot: player.isBot,
         });
-
-        if (step % 7 === 0) {
-          events.push({ userId, matchId, mapId, date, x: startX + 12, y: 122, z: startZ + 14, tsMs: ts + 50, event: 'Loot', isBot: false });
-        }
       }
+      baseTs += 120;
     }
 
-    for (const userId of botIds) {
-      for (let step = 0; step < 22; step++) {
-        const ts = step * 1100;
-        const x = -220 + step * 5 + (userId === '1440' ? 20 : -10);
-        const z = -420 + step * 3 + (userId === '1440' ? -5 : 12);
-        events.push({ userId, matchId, mapId, date, x, y: 118, z, tsMs: ts, event: 'BotPosition', isBot: true });
-      }
-    }
-
-    for (let idx = 0; idx < 4; idx++) {
-      const ts = 1000 + idx * 3000;
-      const killX = -310 + idx * 40;
-      const killZ = -360 + idx * 25;
-      events.push({ userId: humanIds[idx % humanIds.length], matchId, mapId, date, x: killX, y: 122, z: killZ, tsMs: ts, event: idx % 2 === 0 ? 'Kill' : 'Killed', isBot: false });
-      events.push({ userId: botIds[idx % botIds.length], matchId, mapId, date, x: killX + 10, y: 120, z: killZ + 12, tsMs: ts + 100, event: idx % 2 === 0 ? 'BotKilled' : 'BotKill', isBot: true });
-      if (idx % 2 === 0) {
-        events.push({ userId: humanIds[1], matchId, mapId, date, x: killX + 8, y: 118, z: killZ + 18, tsMs: ts + 200, event: 'KilledByStorm', isBot: false });
-      }
+    const killTimes = [4200, 8400, 11500];
+    for (let i = 0; i < killTimes.length; i++) {
+      const base = killTimes[i] + matchIndex * 900;
+      synthetic.push({
+        userId: `human-${matchIndex}-1`,
+        matchId,
+        mapId,
+        date,
+        x: 180 + i * 30,
+        y: 0,
+        z: 180 + i * 20,
+        tsMs: base,
+        event: i % 2 === 0 ? "Kill" : "Loot",
+        isBot: false,
+      });
+      synthetic.push({
+        userId: `bot-${matchIndex}-1`,
+        matchId,
+        mapId,
+        date,
+        x: 200 + i * 25,
+        y: 0,
+        z: 220 + i * 15,
+        tsMs: base + 180,
+        event: i % 2 === 0 ? "BotKilled" : "KilledByStorm",
+        isBot: true,
+      });
     }
   }
 
-  return events;
+  return normalizeMatchTimes(
+    synthetic.filter((event) => eventTypes.includes(event.event)),
+  );
 }
 
 export async function loadEvents(): Promise<GameEvent[]> {
@@ -125,46 +128,59 @@ export async function loadEvents(): Promise<GameEvent[]> {
 
     try {
       const table = await conn.query(`
-        SELECT
-          user_id AS user_id,
-          match_id AS match_id,
-          map_id AS map_id,
-          COALESCE(date, 'unknown') AS date,
-          x,
-          y,
-          z,
-          ts,
-          event,
-          CAST(is_bot AS BOOLEAN) AS is_bot
-        FROM read_parquet('events.parquet')
-        ORDER BY ts ASC
+          SELECT
+            user_id AS user_id,
+            match_id AS match_id,
+            map_id AS map_id,
+            date,
+            x,
+            y,
+            z,
+            ts,
+            event,
+            CAST(is_bot AS BOOLEAN) AS is_bot
+          FROM read_parquet('events.parquet')
+          ORDER BY ts ASC
       `);
 
       const rows = table.toArray().map((row) => {
         const record = row as Record<string, unknown>;
+        const x = Number(record.x);
+        const y = Number(record.y);
+        const z = Number(record.z);
+        if (![x, y, z].every(Number.isFinite))
+          throw new Error("Invalid event coordinate");
         return {
-          userId: String(record.user_id ?? ''),
-          matchId: String(record.match_id ?? ''),
-          mapId: String(record.map_id ?? ''),
-          date: String(record.date ?? 'unknown'),
-          x: Number(record.x ?? 0),
-          y: Number(record.y ?? 0),
-          z: Number(record.z ?? 0),
-          tsMs: normalizeTs(record.ts),
-          event: normalizeEvent(String(record.event ?? 'Position')),
-          isBot: Boolean(record.is_bot ?? false),
+          userId: String(record.user_id ?? ""),
+          matchId: String(record.match_id ?? ""),
+          mapId: parseMapId(record.map_id),
+          date: String(record.date ?? "").trim(),
+          x,
+          y,
+          z,
+          tsMs: parseTimestampMs(record.ts),
+          event: parseEventType(record.event),
+          isBot: Boolean(record.is_bot),
         } satisfies GameEvent;
       });
 
-      if (rows.length > 0) return rows;
+      if (rows.length === 0)
+        throw new Error("events.parquet contains no event rows");
+      if (
+        rows.some((event) => !event.userId || !event.matchId || !event.date)
+      ) {
+        throw new Error(
+          "events.parquet contains rows missing user, match, or date metadata",
+        );
+      }
+      return normalizeMatchTimes(rows);
     } finally {
       await conn.close();
     }
-  } catch {
-    // Fall back to a generated demo dataset when the merged parquet isn't present yet.
+  } catch (error) {
+    console.warn("Falling back to synthetic demo events:", error);
+    return generateSyntheticEvents();
   }
-
-  return generateSyntheticEvents();
 }
 
 export function getHeatmapColor(mode: HeatmapMode) {
