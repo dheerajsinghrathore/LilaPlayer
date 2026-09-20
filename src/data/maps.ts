@@ -1,6 +1,6 @@
-import type { MapConfig } from '../types/game';
+import type { MapConfig, MapId } from '../types/game';
 
-export const MAPS: Record<string, MapConfig> = {
+export const MAPS: Record<MapId, MapConfig> = {
   AmbroseValley: {
     scale: 900,
     originX: -370,
@@ -21,10 +21,13 @@ export const MAPS: Record<string, MapConfig> = {
   }
 };
 
-export function worldToPixel(x: number, z: number, mapId: string) {
+export function worldToPixel(x: number, z: number, mapId: MapId) {
   const map = MAPS[mapId];
-  if (!map) return { x: 512, y: 512 };
   const u = (x - map.originX) / map.scale;
   const v = (z - map.originZ) / map.scale;
   return { x: u * 1024, y: (1 - v) * 1024 };
+}
+
+export function isPixelOnMap({ x, y }: { x: number; y: number }) {
+  return Number.isFinite(x) && Number.isFinite(y) && x >= 0 && x <= 1024 && y >= 0 && y <= 1024;
 }

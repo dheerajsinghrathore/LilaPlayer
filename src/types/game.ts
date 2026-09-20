@@ -10,10 +10,12 @@ export type EventType =
 
 export type HeatmapMode = 'traffic' | 'kills' | 'deaths' | 'storm';
 
+export type MapId = 'AmbroseValley' | 'GrandRift' | 'Lockdown';
+
 export interface GameEvent {
   userId: string;
   matchId: string;
-  mapId: string;
+  mapId: MapId;
   date: string;
   x: number;
   y: number;

@@ -14,9 +14,9 @@ interface ViewerState {
 }
 
 export const useViewerStore = create<ViewerState>((set) => ({
-  mapId: 'all',
-  matchId: 'all',
-  date: 'all',
+  mapId: '',
+  matchId: '',
+  date: '',
   playerType: 'all',
   heatmap: 'traffic',
   currentTimeMs: 0,
