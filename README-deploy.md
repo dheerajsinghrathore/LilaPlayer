@@ -7,7 +7,7 @@ This Vite app is ready to deploy to Vercel for a shareable demo URL.
 Add the live URL here once the project is deployed:
 
 ```text
-https://your-project-name.vercel.app
+https://lila-player.vercel.app/
 ```
 
 ## Deploy to Vercel
