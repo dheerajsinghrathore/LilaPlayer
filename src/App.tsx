@@ -2,20 +2,29 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapViewer } from './components/MapViewer';
 import { useViewerStore } from './store';
 import { loadEvents } from './lib/duckdb';
-import type { GameEvent } from './types/game';
+import type { GameEvent, MapId } from './types/game';
 import './styles.css';
 
 export default function App() {
-  const state = useViewerStore();
+  const {
+    mapId,
+    matchId,
+    date,
+    playerType,
+    heatmap,
+    currentTimeMs,
+    playbackSpeed,
+    playing,
+    set,
+  } = useViewerStore();
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const currentTimeRef = useRef(state.currentTimeMs);
-  const initialSelectionRef = useRef(false);
+  const currentTimeRef = useRef(currentTimeMs);
 
   useEffect(() => {
-    currentTimeRef.current = state.currentTimeMs;
-  }, [state.currentTimeMs]);
+    currentTimeRef.current = currentTimeMs;
+  }, [currentTimeMs]);
 
   useEffect(() => {
     let active = true;
@@ -40,55 +49,47 @@ export default function App() {
     };
   }, []);
 
+  const mapOptions = useMemo(() => [...new Set(events.map((event) => event.mapId))].sort(), [events]);
+
+  const dateOptions = useMemo(() => {
+    if (!mapId) return [];
+    return [...new Set(events.filter((event) => event.mapId === mapId).map((event) => event.date))].sort();
+  }, [events, mapId]);
+
+  const matchOptions = useMemo(() => {
+    if (!mapId || !date) return [];
+    return [...new Set(events
+      .filter((event) => event.mapId === mapId && event.date === date)
+      .map((event) => event.matchId))].sort();
+  }, [date, events, mapId]);
+
+  useEffect(() => {
+    if (mapOptions.length && !mapOptions.includes(mapId as MapId)) set('mapId', mapOptions[0]);
+  }, [mapOptions, mapId, set]);
+
+  useEffect(() => {
+    if (dateOptions.length && !dateOptions.includes(date)) set('date', dateOptions[0]);
+  }, [date, dateOptions, set]);
+
+  useEffect(() => {
+    if (matchOptions.length && !matchOptions.includes(matchId)) set('matchId', matchOptions[0]);
+  }, [matchId, matchOptions, set]);
+
   const filteredEvents = useMemo(() => {
     return events.filter((event) => {
-      if (state.mapId !== 'all' && event.mapId !== state.mapId) return false;
-      if (state.date !== 'all' && event.date !== state.date) return false;
-      if (state.matchId !== 'all' && event.matchId !== state.matchId) return false;
-      if (state.playerType === 'human' && event.isBot) return false;
-      if (state.playerType === 'bot' && !event.isBot) return false;
+      if (event.mapId !== mapId) return false;
+      if (event.date !== date) return false;
+      if (event.matchId !== matchId) return false;
+      if (playerType === 'human' && event.isBot) return false;
+      if (playerType === 'bot' && !event.isBot) return false;
       return true;
     });
-  }, [events, state.date, state.mapId, state.matchId, state.playerType]);
-
-  const currentMatchOptions = useMemo(() => {
-    const allowed = filteredEvents.length
-      ? new Set(filteredEvents.map((event) => event.matchId))
-      : new Set(events.map((event) => event.matchId));
-    return ['all', ...Array.from(allowed).sort()];
-  }, [events, filteredEvents]);
+  }, [date, events, mapId, matchId, playerType]);
 
   const maxTime = useMemo(() => {
     const times = filteredEvents.map((event) => event.tsMs);
     return times.length > 0 ? Math.max(...times) : 10000;
   }, [filteredEvents]);
-
-  useEffect(() => {
-    if (!events.length || initialSelectionRef.current) return;
-
-    const mapCounts = new Map<string, number>();
-    const dateCounts = new Map<string, number>();
-    const matchCounts = new Map<string, number>();
-
-    for (const event of events) {
-      mapCounts.set(event.mapId, (mapCounts.get(event.mapId) ?? 0) + 1);
-      dateCounts.set(event.date, (dateCounts.get(event.date) ?? 0) + 1);
-      matchCounts.set(event.matchId, (matchCounts.get(event.matchId) ?? 0) + 1);
-    }
-
-    const preferredMap = [...mapCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'AmbroseValley';
-    const preferredDate = [...dateCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'February_10';
-    const preferredMatch = [...matchCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'all';
-
-    if (state.mapId === 'all' && state.date === 'all' && state.matchId === 'all') {
-      state.set('mapId', preferredMap);
-      state.set('date', preferredDate);
-      state.set('matchId', preferredMatch);
-      state.set('heatmap', 'traffic');
-      state.set('playing', true);
-      initialSelectionRef.current = true;
-    }
-  }, [events, state]);
 
   const summary = useMemo(() => {
     const uniquePlayers = new Set(filteredEvents.map((event) => event.userId));
@@ -114,28 +115,33 @@ export default function App() {
   }, [filteredEvents]);
 
   useEffect(() => {
-    if (state.currentTimeMs > maxTime) {
-      state.set('currentTimeMs', maxTime);
+    if (currentTimeMs > maxTime) {
+      set('currentTimeMs', maxTime);
     }
-  }, [maxTime, state]);
+  }, [currentTimeMs, maxTime, set]);
 
   useEffect(() => {
-    if (!state.playing) return;
+    set('currentTimeMs', 0);
+    set('playing', false);
+  }, [date, mapId, matchId, set]);
 
-    const tickMs = Math.max(32, 160 / state.playbackSpeed);
+  useEffect(() => {
+    if (!playing) return;
+
+    const tickMs = Math.max(32, 160 / playbackSpeed);
     const step = Math.max(180, Math.round(maxTime / 220));
     const timer = window.setInterval(() => {
       const current = currentTimeRef.current;
       const next = current >= maxTime ? 0 : Math.min(maxTime, current + step);
       currentTimeRef.current = next;
-      state.set('currentTimeMs', next);
+      set('currentTimeMs', next);
       if (next >= maxTime) {
-        state.set('playing', false);
+        set('playing', false);
       }
     }, tickMs);
 
     return () => window.clearInterval(timer);
-  }, [maxTime, state.playbackSpeed, state.playing, state]);
+  }, [maxTime, playbackSpeed, playing, set]);
 
   return (
     <main className="app">
@@ -154,20 +160,26 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {error ? <div className="notice">{error}. Generate public/data/events.parquet with the Python helper first.</div> : null}
+      {error ? <div className="notice" role="alert">{error}. Generate and deploy public/data/events.parquet with the Python helper first.</div> : null}
       <section className="filters">
-        <label>Map<select value={state.mapId} onChange={(e) => state.set('mapId', e.target.value)}><option value="all">All maps</option><option>AmbroseValley</option><option>GrandRift</option><option>Lockdown</option></select></label>
-        <label>Date<select value={state.date} onChange={(e) => state.set('date', e.target.value)}><option value="all">All dates</option><option>February_10</option><option>February_11</option><option>February_12</option><option>February_13</option><option>February_14</option></select></label>
-        <label>Match<select value={state.matchId} onChange={(e) => state.set('matchId', e.target.value)}>
-          {currentMatchOptions.map((match) => (
-            <option key={match} value={match}>{match === 'all' ? 'All matches' : match}</option>
-          ))}
+        <label>Map<select value={mapId} disabled={!mapOptions.length} onChange={(e) => set('mapId', e.target.value)}>
+          <option value="">Select a map</option>{mapOptions.map((map) => <option key={map} value={map}>{map}</option>)}
         </select></label>
-        <label>Players<select value={state.playerType} onChange={(e) => state.set('playerType', e.target.value as typeof state.playerType)}><option value="all">Humans + Bots</option><option value="human">Humans</option><option value="bot">Bots</option></select></label>
-        <label>Heatmap<select value={state.heatmap} onChange={(e) => state.set('heatmap', e.target.value as typeof state.heatmap)}><option value="none">Off</option><option value="traffic">Traffic</option><option value="kills">Kills</option><option value="deaths">Deaths</option><option value="storm">Storm deaths</option></select></label>
+        <label>Date<select value={date} disabled={!dateOptions.length} onChange={(e) => set('date', e.target.value)}>
+          <option value="">Select a date</option>{dateOptions.map((dateOption) => <option key={dateOption} value={dateOption}>{dateOption}</option>)}
+        </select></label>
+        <label>Match<select value={matchId} onChange={(e) => set('matchId', e.target.value)}>
+          <option value="">Select a match</option>{matchOptions.map((match) => <option key={match} value={match}>{match}</option>)}
+        </select></label>
+        <label>Players<select value={playerType} onChange={(e) => set('playerType', e.target.value as typeof playerType)}><option value="all">Humans + Bots</option><option value="human">Humans</option><option value="bot">Bots</option></select></label>
+        <label>Heatmap<select value={heatmap} onChange={(e) => set('heatmap', e.target.value as typeof heatmap)}><option value="none">Off</option><option value="traffic">Traffic</option><option value="kills">Kills</option><option value="deaths">Deaths</option><option value="storm">Storm deaths</option></select></label>
       </section>
       <section className="workspace">
-        <div className="map-card"><MapViewer mapId={state.mapId} events={filteredEvents} currentTimeMs={state.currentTimeMs} heatmap={state.heatmap} /></div>
+        <div className="map-card">
+          {mapId && date && matchId
+            ? <MapViewer mapId={mapId as MapId} events={filteredEvents} currentTimeMs={currentTimeMs} heatmap={heatmap} />
+            : <div className="map-shell map-message">Select a map, date, and match to view a replay.</div>}
+        </div>
         <aside className="sidebar">
           <h2>Match summary</h2>
           <div className="stats">
@@ -182,24 +194,24 @@ export default function App() {
             <div className="wide-stat"><span>Events</span><b>{summary.events}</b></div>
           </div>
           <h2>Legend</h2>
-          <div className="legend"><span>🔴 Kill</span><span>⚪ Death</span><span>🟡 Loot</span><span>🟣 Storm death</span><span>━━ Human path</span><span>╌╌ Bot path</span></div>
+          <div className="legend"><span>▲ Kill</span><span>✕ Death</span><span>◆ Loot</span><span>● Storm death</span><span>━━ Human path</span><span>╌╌ Bot path</span></div>
         </aside>
       </section>
       <section className="timeline">
         <div className="timeline-head">
           <h2>Playback</h2>
           <div className="playback-controls">
-            <button type="button" onClick={() => state.set('playing', !state.playing)}>{state.playing ? 'Pause' : 'Play'}</button>
-            <button type="button" onClick={() => { state.set('currentTimeMs', 0); state.set('playing', false); }}>Reset</button>
-            <button type="button" onClick={() => { state.set('currentTimeMs', maxTime); state.set('playing', false); }}>End</button>
+            <button type="button" onClick={() => set('playing', !playing)}>{playing ? 'Pause' : 'Play'}</button>
+            <button type="button" onClick={() => { set('currentTimeMs', 0); set('playing', false); }}>Reset</button>
+            <button type="button" onClick={() => { set('currentTimeMs', maxTime); set('playing', false); }}>End</button>
           </div>
-          <span>{formatTime(state.currentTimeMs)} / {formatTime(maxTime)}</span>
+          <span>{formatTime(currentTimeMs)} / {formatTime(maxTime)}</span>
         </div>
         <div className="timeline-footer">
-          <input type="range" min="0" max={maxTime} value={state.currentTimeMs} onChange={(e) => { state.set('currentTimeMs', Number(e.target.value)); state.set('playing', false); }} />
+          <input type="range" min="0" max={maxTime} value={currentTimeMs} onChange={(e) => { set('currentTimeMs', Number(e.target.value)); set('playing', false); }} />
           <label className="speed-select">
             Speed
-            <select value={state.playbackSpeed} onChange={(e) => state.set('playbackSpeed', Number(e.target.value))}>
+            <select value={playbackSpeed} onChange={(e) => set('playbackSpeed', Number(e.target.value))}>
               <option value={0.5}>0.5×</option>
               <option value={1}>1×</option>
               <option value={2}>2×</option>
